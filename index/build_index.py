@@ -13,6 +13,8 @@ def build_index(resnet_embeddings):
     ids = []
 
     for path, emb in resnet_embeddings.items():
+        if "copydays/strong" in path:
+            continue  # skip query images
         index.add(emb.reshape(1, -1).astype("float32"))
         ids.append(path)
 

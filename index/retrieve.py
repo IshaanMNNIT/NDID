@@ -12,12 +12,18 @@ def load_index():
     return index, ids
 
 
-def retrieve(query_emb, k=10):
+def retrieve(query_emb, k=100):
     index, ids = load_index()
-    D, I = index.search(query_emb.reshape(1, -1).astype("float32"), k)
+
+    # 🔑 FIX: normalize query
+    query_emb = query_emb.astype("float32")
+    query_emb = query_emb / np.linalg.norm(query_emb)
+
+    D, I = index.search(query_emb.reshape(1, -1), k)
 
     results = []
     for score, idx in zip(D[0], I[0]):
         results.append((ids[idx], float(score)))
 
     return results
+
