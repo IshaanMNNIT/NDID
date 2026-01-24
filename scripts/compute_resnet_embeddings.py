@@ -1,20 +1,29 @@
-import pickle
 from pathlib import Path
+import pickle
 import torch
 
 from embedding.resnet_embedder import ResNetEmbedder
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 ROOTS = [
-    Path("data/raw/copydays/original"),
-    Path("data/raw/copydays/strong"),
-    Path("data/raw/landmarks"),
+    PROJECT_ROOT / "data/raw/copydays/original",
+    PROJECT_ROOT / "data/raw/copydays/strong",
+    PROJECT_ROOT / "data/raw/landmarks",
+    PROJECT_ROOT / "data/raw/airbnb/images",
+    PROJECT_ROOT / "data/raw/airbnb/queries",
 ]
+
+
+def normalize_path(p: Path) -> str:
+    return p.resolve().relative_to(PROJECT_ROOT).as_posix()
+
 
 def collect_images():
     imgs = []
-    for root in ROOTS:
-        if root.exists():
-            imgs.extend(root.rglob("*.jpg"))
+    for r in ROOTS:
+        if r.exists():
+            imgs.extend(sorted(r.rglob("*.jpg")))
     return imgs
 
 
@@ -25,15 +34,15 @@ if __name__ == "__main__":
     embeddings = {}
     images = collect_images()
 
-    print(f"Computing ResNet embeddings for {len(images)} images")
+    print(f"Embedding {len(images)} images")
 
-    for img_path in images:
-        embeddings[str(img_path)] = embedder.embed(img_path).numpy()
+    for img in images:
+        embeddings[normalize_path(img)] = embedder.embed(img).numpy()
 
-    out = Path("data/processed/resnet_embeddings.pkl")
+    out = PROJECT_ROOT / "data/processed/resnet_embeddings.pkl"
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(out, "wb") as f:
-        pickle.dump(embeddings, f)
+    with out.open("wb") as f:
+        pickle.dump(embeddings, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    print("Saved embeddings to", out)
+    print("[DONE] ResNet embeddings saved")
