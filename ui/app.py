@@ -1,177 +1,125 @@
 # ui/app.py
 
 import sys
-import os
 from pathlib import Path
+import json
 import streamlit as st
-import numpy as np
-from PIL import Image
-import torch
+import matplotlib.pyplot as plt
 
 # --------------------------------------------------
-# Fix Streamlit import path
+# Ensure project root is on PYTHONPATH (Streamlit quirk)
 # --------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # --------------------------------------------------
-# Imports from project
+# Load frozen metrics
 # --------------------------------------------------
-from embedding.resnet_embedder import ResNetEmbedder
-from embedding.clip_embedder import CLIPEmbedder
-from features.phash import compute_phash, hamming_distance
-from index.retrieve import retrieve
-from evaluation.gating import gate
-from evaluation.decision import decide
+METRICS_PATH = PROJECT_ROOT / "data/processed/metrics.json"
+
+with METRICS_PATH.open() as f:
+    METRICS = json.load(f)
 
 # --------------------------------------------------
 # Page config
 # --------------------------------------------------
-st.set_page_config(page_title="EigenSoul NDID", layout="wide")
-st.title("🌀 EigenSoul — Near Duplicate Image Detection")
-
-# --------------------------------------------------
-# Load models (cached)
-# --------------------------------------------------
-@st.cache_resource
-def load_models():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    return ResNetEmbedder(device=device), CLIPEmbedder(device=device)
-
-resnet_model, clip_model = load_models()
-
-def cosine(a, b):
-    return float(np.dot(a, b))  # vectors already L2-normalized
-
-# --------------------------------------------------
-# Sidebar
-# --------------------------------------------------
-mode = st.sidebar.radio(
-    "Mode",
-    ["Search Index", "Compare Two Images"]
+st.set_page_config(
+    page_title="EigenSoul – NDID Results",
+    layout="centered"
 )
 
-# ==================================================
-# MODE 1 — SEARCH INDEX
-# ==================================================
-if mode == "Search Index":
-    st.header("🔍 Search for Near-Duplicates")
+st.title("🌀 EigenSoul")
+st.subheader("Near-Duplicate Image Detection — Final Evaluation Results")
 
-    uploaded = st.file_uploader(
-        "Upload Query Image",
-        type=["jpg", "jpeg", "png"]
-    )
+st.markdown(
+    """
+This dashboard displays **final, frozen evaluation metrics**.  
+No models are executed. No thresholds are tuned.  
+Metrics were computed offline using dataset-appropriate evaluation protocols.
+"""
+)
 
-    if uploaded:
-        img = Image.open(uploaded).convert("RGB")
-        st.image(img, caption="Query Image", width=300)
+st.divider()
 
-        tmp = Path("ui/_query.jpg")
-        img.save(tmp)
+# --------------------------------------------------
+# Dataset selector
+# --------------------------------------------------
+dataset = st.selectbox(
+    "Select Dataset",
+    ["Copydays", "Airbnb"]
+)
 
-        if st.button("Find Matches"):
-            with st.spinner("Processing..."):
-                # ---- Feature extraction ----
-                q_ph = compute_phash(tmp)
-                q_rs = resnet_model.embed(tmp).numpy()
+key = dataset.lower()
+m = METRICS[key]
 
-                # ---- Retrieval ----
-                results = retrieve(q_rs, k=10)
+# --------------------------------------------------
+# Metric cards
+# --------------------------------------------------
+c1, c2, c3 = st.columns(3)
 
-            st.subheader("Results")
+c1.metric("Precision", f"{m['precision']:}")
+c2.metric("Recall", f"{m['recall']:}")
+c3.metric("F1 Score", f"{m['f1']:}")
 
-            for path, resnet_sim in results:
-                if not os.path.exists(path):
-                    continue
+st.divider()
 
-                # ---- Pairwise signals ----
-                p_ph = compute_phash(path)
-                ph_dist = hamming_distance(q_ph, p_ph)
+# --------------------------------------------------
+# Simple bar chart
+# --------------------------------------------------
+fig, ax = plt.subplots()
+ax.bar(
+    ["Precision", "Recall", "F1"],
+    [m["precision"], m["recall"], m["f1"]],
+)
+ax.set_ylim(0, 1)
+ax.set_ylabel("Score")
+ax.set_title(f"{dataset} Performance")
 
-                g = gate(ph_dist, resnet_sim)
+st.pyplot(fig)
 
-                # ---- CLIP only if ambiguous ----
-                clip_sim = -1.0
-                if g == "AMBIGUOUS":
-                    q_cl = clip_model.embed(tmp).numpy()
-                    p_cl = clip_model.embed(path).numpy()
-                    clip_sim = cosine(q_cl, p_cl)
+st.divider()
 
-                # ---- FINAL decision (ALWAYS logistic regression) ----
-                decision = decide(ph_dist, resnet_sim, clip_sim)
+# --------------------------------------------------
+# Comparison view
+# --------------------------------------------------
+st.subheader("Copydays vs Airbnb")
 
-                label = "MATCH" if decision == 1 else "NO MATCH"
-                color = "green" if decision == 1 else "red"
+labels = ["Precision", "Recall", "F1"]
+copy = METRICS["copydays"]
+air = METRICS["airbnb"]
 
-                with st.container():
-                    c1, c2, c3 = st.columns([1, 2, 1])
-                    c1.image(path, width=150)
-                    c2.markdown(f"**Path:** `{path}`")
-                    c2.markdown(
-                        f"""
-                        - pHash distance: `{ph_dist}`
-                        - ResNet similarity: `{resnet_sim:.3f}`
-                        - CLIP similarity: `{clip_sim if clip_sim >= 0 else 'N/A'}`
-                        - Gate: `{g}`
-                        """
-                    )
-                    c3.markdown(f"## :{color}[{label}]")
-                    st.divider()
+fig2, ax2 = plt.subplots()
+x = range(len(labels))
 
-# ==================================================
-# MODE 2 — COMPARE TWO IMAGES
-# ==================================================
-else:
-    st.header("🆚 Compare Two Images")
+ax2.bar(
+    [i - 0.2 for i in x],
+    [copy[l.lower()] for l in labels],
+    width=0.4,
+    label="Copydays"
+)
+ax2.bar(
+    [i + 0.2 for i in x],
+    [air[l.lower()] for l in labels],
+    width=0.4,
+    label="Airbnb"
+)
 
-    c1, c2 = st.columns(2)
-    f1 = c1.file_uploader("Image A", type=["jpg", "jpeg", "png"], key="a")
-    f2 = c2.file_uploader("Image B", type=["jpg", "jpeg", "png"], key="b")
+ax2.set_xticks(list(x))
+ax2.set_xticklabels(labels)
+ax2.set_ylim(0, 1)
+ax2.legend()
+ax2.set_title("Cross-Dataset Generalization")
 
-    if f1 and f2:
-        img1 = Image.open(f1).convert("RGB")
-        img2 = Image.open(f2).convert("RGB")
+st.pyplot(fig2)
 
-        c1.image(img1, caption="Image A", use_column_width=True)
-        c2.image(img2, caption="Image B", use_column_width=True)
+st.divider()
 
-        if st.button("Compare"):
-            p1 = Path("ui/_a.jpg")
-            p2 = Path("ui/_b.jpg")
-            img1.save(p1)
-            img2.save(p2)
-
-            # ---- Signals ----
-            ph1 = compute_phash(p1)
-            ph2 = compute_phash(p2)
-            ph_dist = hamming_distance(ph1, ph2)
-
-            rs1 = resnet_model.embed(p1).numpy()
-            rs2 = resnet_model.embed(p2).numpy()
-            resnet_sim = cosine(rs1, rs2)
-
-            g = gate(ph_dist, resnet_sim)
-
-            clip_sim = -1.0
-            if g == "AMBIGUOUS":
-                cl1 = clip_model.embed(p1).numpy()
-                cl2 = clip_model.embed(p2).numpy()
-                clip_sim = cosine(cl1, cl2)
-                st.metric("CLIP Similarity", f"{clip_sim:.4f}")
-
-            # ---- FINAL decision ----
-            final = decide(ph_dist, resnet_sim, clip_sim)
-            verdict = "DUPLICATE" if final == 1 else "DIFFERENT"
-
-            st.success(f"Final Verdict: **{verdict}**")
-            st.markdown(
-                f"""
-                **Signals**
-                - pHash distance: `{ph_dist}`
-                - ResNet similarity: `{resnet_sim:.4f}`
-                - Gate: `{g}`
-                """
-            )
-            if clip_sim >= 0:
-                st.markdown(f"- CLIP similarity: `{clip_sim:.4f}`")
+st.markdown(
+    """
+### ✅ Summary
+- Same pipeline evaluated on **academic (Copydays)** and **real-world (Airbnb)** data
+- No retraining between datasets
+- Evaluation aligned with production NDID systems
+"""
+)
